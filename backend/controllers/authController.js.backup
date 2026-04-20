@@ -1,0 +1,159 @@
+const jwt = require('jsonwebtoken');
+const { validationResult } = require('express-validator');
+const { registerUser, loginUser, getUserFromToken } = require('../services/jwtAuth');
+const { handleGoogleAuthSuccess, isGoogleOAuthConfigured } = require('../services/googleAuth');
+const passport = require('passport');
+
+// @desc    Register user
+// @route   POST /api/auth/register
+// @access  Public
+const register = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { name, phone, email, password, area, address } = req.body;
+
+    // Check if user exists
+    const existingUser = await User.findOne({
+      $or: [{ phone }, { email: email ? email : null }],
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    // Create user
+    const user = await User.create({
+      name,
+      phone,
+      email,
+      area,
+      address,
+      password,
+      role: 'USER',
+      status: 'active',
+    });
+
+    const token = generateToken(user._id);
+
+    res.status(201).json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        area: user.area,
+        address: user.address,
+        role: user.role,
+        status: user.status,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// @desc    Login user
+// @route   POST /api/auth/login
+// @access  Public
+const login = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { phone, password } = req.body;
+
+    // Check if user exists
+    const user = await User.findOne({ phone });
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    if (user.status !== 'active') {
+      return res.status(403).json({ error: 'Account is not active' });
+    }
+
+    const token = generateToken(user._id);
+
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        area: user.area,
+        address: user.address,
+        role: user.role,
+        status: user.status,
+        isVerified: user.isVerified,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// @desc    Get current user
+// @route   GET /api/auth/me
+// @access  Private
+const getMe = async (req, res) => {
+  res.json({
+      user: {
+        id: req.user._id,
+        name: req.user.name,
+      phone: req.user.phone,
+      email: req.user.email,
+      area: req.user.area,
+      address: req.user.address,
+      role: req.user.role,
+        status: req.user.status,
+        isVerified: req.user.isVerified,
+        avatar: req.user.avatar,
+      },
+  });
+};
+
+// @desc    Google OAuth
+// @route   GET /api/auth/google
+// @access  Public
+const googleAuth = (req, res, next) => {
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    return res.status(501).json({ error: 'Google OAuth not configured' });
+  }
+  const passport = require('../config/passport');
+  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+};
+
+// @desc    Google OAuth callback
+// @route   GET /api/auth/google/callback
+// @access  Public
+const googleAuthCallback = (req, res, next) => {
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    return res.status(501).json({ error: 'Google OAuth not configured' });
+  }
+  const passport = require('../config/passport');
+  passport.authenticate('google', { failureRedirect: '/login', session: false })(req, res, next);
+};
+
+// After successful Google auth
+const googleAuthSuccess = (req, res) => {
+  const token = generateToken(req.user._id);
+  // In a real app, redirect to frontend with token
+  res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
+};
+
+module.exports = {
+  register,
+  login,
+  getMe,
+  googleAuth,
+  googleAuthCallback,
+  googleAuthSuccess,
+};
